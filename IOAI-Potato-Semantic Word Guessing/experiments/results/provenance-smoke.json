@@ -1,0 +1,158 @@
+{
+  "salt": "provenance-smoke",
+  "count": 2,
+  "folds": [
+    0
+  ],
+  "oracles": [
+    "held_raw"
+  ],
+  "secret_mode": "cell_disjoint",
+  "argv": [
+    "--configs",
+    "control_sharp",
+    "ensemble_mi_base13",
+    "--folds",
+    "0",
+    "--oracles",
+    "held_raw",
+    "--count",
+    "2",
+    "--salt",
+    "provenance-smoke",
+    "--secret-mode",
+    "cell_disjoint",
+    "--output",
+    "experiments/results/provenance-smoke.json"
+  ],
+  "source_sha256": "2a6042fd2d827e9489321df64cdca4ceeb9b2a88a35910c45c1de9898ce597b8",
+  "vocabulary_sha256": "f2432b7efcca4a7718e3aba2ae89076bb80ab8ebb1913882d87c6b4989fce898",
+  "embeddings_sha256": "21a9b583399ca67525b8287345874f2af2c589e74c9a733ce488abf118583a93",
+  "numpy_version": "2.4.6",
+  "configs": {
+    "control_sharp": {
+      "name": "control_sharp",
+      "family": "single",
+      "link": "logistic",
+      "scale": 0.005,
+      "flip": 0.0,
+      "composite_prior": 0.45,
+      "noise_mixture": false,
+      "query": "composite",
+      "late_mode": "none",
+      "late_turn": 31,
+      "coverage_weight": 0.55,
+      "coverage_floor": 0.04,
+      "rejuvenation_threshold": 0.0,
+      "rejuvenation_max": 0.0,
+      "preference_c": 1.5,
+      "preference_temperature": 0.16,
+      "switch_threshold": 0.04,
+      "ensemble_priors": [
+        0.5,
+        0.3,
+        0.2
+      ],
+      "query_shortlist": 96,
+      "hit_shortlist": 32,
+      "query_chunk": 16
+    },
+    "ensemble_mi_base13": {
+      "name": "ensemble_mi_base13",
+      "family": "ensemble",
+      "link": "logistic",
+      "scale": 0.008,
+      "flip": 0.04,
+      "composite_prior": 0.45,
+      "noise_mixture": false,
+      "query": "mi",
+      "late_mode": "base",
+      "late_turn": 13,
+      "coverage_weight": 0.55,
+      "coverage_floor": 0.04,
+      "rejuvenation_threshold": 0.0,
+      "rejuvenation_max": 0.0,
+      "preference_c": 1.5,
+      "preference_temperature": 0.16,
+      "switch_threshold": 0.04,
+      "ensemble_priors": [
+        0.5,
+        0.3,
+        0.2
+      ],
+      "query_shortlist": 96,
+      "hit_shortlist": 32,
+      "query_chunk": 16
+    }
+  },
+  "rows": [
+    {
+      "games": 2,
+      "wins": 1,
+      "score": 39.0,
+      "p10": 0.0,
+      "p20": 0.0,
+      "median": 26.0,
+      "p90": 31.0,
+      "config": "control_sharp",
+      "held_out": 0,
+      "oracle": "held_raw",
+      "secret_indices": [
+        189,
+        1581
+      ],
+      "turns": [
+        21,
+        null
+      ],
+      "elapsed": 0.524
+    },
+    {
+      "games": 2,
+      "wins": 2,
+      "score": 95.0,
+      "p10": 50.0,
+      "p20": 100.0,
+      "median": 12.0,
+      "p90": 15.0,
+      "config": "ensemble_mi_base13",
+      "held_out": 0,
+      "oracle": "held_raw",
+      "secret_indices": [
+        189,
+        1581
+      ],
+      "turns": [
+        15,
+        9
+      ],
+      "elapsed": 0.522
+    }
+  ],
+  "summaries": [
+    {
+      "config": "ensemble_mi_base13",
+      "mean_score": 95.0,
+      "median_score": 95.0,
+      "worst_score": 95.0,
+      "cvar25_score": 95.0,
+      "wins": 2,
+      "games": 2,
+      "win_rate": 100.0,
+      "mean_p10": 50.0,
+      "elapsed": 0.522
+    },
+    {
+      "config": "control_sharp",
+      "mean_score": 39.0,
+      "median_score": 39.0,
+      "worst_score": 39.0,
+      "cvar25_score": 39.0,
+      "wins": 1,
+      "games": 2,
+      "win_rate": 50.0,
+      "mean_p10": 0.0,
+      "elapsed": 0.524
+    }
+  ]
+}

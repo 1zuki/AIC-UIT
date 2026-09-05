@@ -3,6 +3,12 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Local agent worktrees
+.claude/
+
+# Downloaded model artifacts
+models/
+
 dataset/
 datasets/
 data/

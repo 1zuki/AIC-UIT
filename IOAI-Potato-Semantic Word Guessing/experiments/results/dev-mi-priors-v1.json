@@ -1,0 +1,197 @@
+{
+  "salt": "potato-new-search-dev-v1",
+  "count": 8,
+  "folds": [
+    0,
+    2,
+    4
+  ],
+  "oracles": [
+    "held_raw",
+    "held_mix"
+  ],
+  "rows": [
+    {
+      "games": 8,
+      "wins": 8,
+      "score": 87.5,
+      "p10": 25.0,
+      "p20": 75.0,
+      "median": 14.5,
+      "p90": 29.0,
+      "config": "ensemble_mi_70",
+      "held_out": 0,
+      "oracle": "held_raw",
+      "elapsed": 4.34
+    },
+    {
+      "games": 8,
+      "wins": 8,
+      "score": 88.25,
+      "p10": 25.0,
+      "p20": 75.0,
+      "median": 14.5,
+      "p90": 29.0,
+      "config": "ensemble_mi_70",
+      "held_out": 0,
+      "oracle": "held_mix",
+      "elapsed": 4.177
+    },
+    {
+      "games": 8,
+      "wins": 7,
+      "score": 78.0,
+      "p10": 50.0,
+      "p20": 62.5,
+      "median": 11.0,
+      "p90": 31.0,
+      "config": "ensemble_mi_70",
+      "held_out": 2,
+      "oracle": "held_raw",
+      "elapsed": 4.365
+    },
+    {
+      "games": 8,
+      "wins": 8,
+      "score": 93.0,
+      "p10": 62.5,
+      "p20": 87.5,
+      "median": 8.5,
+      "p90": 27.0,
+      "config": "ensemble_mi_70",
+      "held_out": 2,
+      "oracle": "held_mix",
+      "elapsed": 3.436
+    },
+    {
+      "games": 8,
+      "wins": 5,
+      "score": 56.0,
+      "p10": 25.0,
+      "p20": 50.0,
+      "median": 21.5,
+      "p90": 31.0,
+      "config": "ensemble_mi_70",
+      "held_out": 4,
+      "oracle": "held_raw",
+      "elapsed": 5.432
+    },
+    {
+      "games": 8,
+      "wins": 7,
+      "score": 76.5,
+      "p10": 25.0,
+      "p20": 62.5,
+      "median": 17.5,
+      "p90": 31.0,
+      "config": "ensemble_mi_70",
+      "held_out": 4,
+      "oracle": "held_mix",
+      "elapsed": 4.626
+    },
+    {
+      "games": 8,
+      "wins": 8,
+      "score": 87.5,
+      "p10": 25.0,
+      "p20": 75.0,
+      "median": 14.5,
+      "p90": 29.0,
+      "config": "ensemble_mi_80",
+      "held_out": 0,
+      "oracle": "held_raw",
+      "elapsed": 4.207
+    },
+    {
+      "games": 8,
+      "wins": 8,
+      "score": 88.25,
+      "p10": 25.0,
+      "p20": 75.0,
+      "median": 14.5,
+      "p90": 29.0,
+      "config": "ensemble_mi_80",
+      "held_out": 0,
+      "oracle": "held_mix",
+      "elapsed": 4.115
+    },
+    {
+      "games": 8,
+      "wins": 7,
+      "score": 78.25,
+      "p10": 50.0,
+      "p20": 62.5,
+      "median": 11.0,
+      "p90": 31.0,
+      "config": "ensemble_mi_80",
+      "held_out": 2,
+      "oracle": "held_raw",
+      "elapsed": 4.265
+    },
+    {
+      "games": 8,
+      "wins": 8,
+      "score": 93.25,
+      "p10": 62.5,
+      "p20": 87.5,
+      "median": 8.5,
+      "p90": 26.0,
+      "config": "ensemble_mi_80",
+      "held_out": 2,
+      "oracle": "held_mix",
+      "elapsed": 3.166
+    },
+    {
+      "games": 8,
+      "wins": 5,
+      "score": 52.5,
+      "p10": 25.0,
+      "p20": 37.5,
+      "median": 25.0,
+      "p90": 31.0,
+      "config": "ensemble_mi_80",
+      "held_out": 4,
+      "oracle": "held_raw",
+      "elapsed": 5.87
+    },
+    {
+      "games": 8,
+      "wins": 7,
+      "score": 74.25,
+      "p10": 25.0,
+      "p20": 50.0,
+      "median": 20.5,
+      "p90": 31.0,
+      "config": "ensemble_mi_80",
+      "held_out": 4,
+      "oracle": "held_mix",
+      "elapsed": 4.583
+    }
+  ],
+  "summaries": [
+    {
+      "config": "ensemble_mi_70",
+      "mean_score": 79.875,
+      "median_score": 82.75,
+      "worst_score": 56.0,
+      "cvar25_score": 66.25,
+      "wins": 43,
+      "games": 48,
+      "win_rate": 89.583,
+      "mean_p10": 35.417,
+      "elapsed": 26.376
+    },
+    {
+      "config": "ensemble_mi_80",
+      "mean_score": 79.0,
+      "median_score": 82.875,
+      "worst_score": 52.5,
+      "cvar25_score": 63.375,
+      "wins": 43,
+      "games": 48,
+      "win_rate": 89.583,
+      "mean_p10": 35.417,
+      "elapsed": 26.206
+    }
+  ]
+}

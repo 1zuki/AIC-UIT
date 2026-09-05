@@ -1,0 +1,107 @@
+{
+  "salt": "potato-new-search-dev-v1",
+  "count": 8,
+  "folds": [
+    0,
+    2,
+    4
+  ],
+  "oracles": [
+    "held_raw",
+    "held_mix"
+  ],
+  "rows": [
+    {
+      "games": 8,
+      "wins": 8,
+      "score": 88.25,
+      "p10": 25.0,
+      "p20": 75.0,
+      "median": 13.5,
+      "p90": 28.0,
+      "config": "ensemble_mi",
+      "held_out": 0,
+      "oracle": "held_raw",
+      "elapsed": 3.945
+    },
+    {
+      "games": 8,
+      "wins": 8,
+      "score": 89.0,
+      "p10": 25.0,
+      "p20": 75.0,
+      "median": 13.5,
+      "p90": 28.0,
+      "config": "ensemble_mi",
+      "held_out": 0,
+      "oracle": "held_mix",
+      "elapsed": 3.763
+    },
+    {
+      "games": 8,
+      "wins": 7,
+      "score": 78.0,
+      "p10": 50.0,
+      "p20": 62.5,
+      "median": 11.0,
+      "p90": 31.0,
+      "config": "ensemble_mi",
+      "held_out": 2,
+      "oracle": "held_raw",
+      "elapsed": 4.109
+    },
+    {
+      "games": 8,
+      "wins": 8,
+      "score": 93.0,
+      "p10": 62.5,
+      "p20": 87.5,
+      "median": 8.5,
+      "p90": 27.0,
+      "config": "ensemble_mi",
+      "held_out": 2,
+      "oracle": "held_mix",
+      "elapsed": 3.044
+    },
+    {
+      "games": 8,
+      "wins": 5,
+      "score": 56.0,
+      "p10": 25.0,
+      "p20": 50.0,
+      "median": 21.5,
+      "p90": 31.0,
+      "config": "ensemble_mi",
+      "held_out": 4,
+      "oracle": "held_raw",
+      "elapsed": 4.909
+    },
+    {
+      "games": 8,
+      "wins": 7,
+      "score": 76.5,
+      "p10": 25.0,
+      "p20": 62.5,
+      "median": 17.5,
+      "p90": 31.0,
+      "config": "ensemble_mi",
+      "held_out": 4,
+      "oracle": "held_mix",
+      "elapsed": 4.187
+    }
+  ],
+  "summaries": [
+    {
+      "config": "ensemble_mi",
+      "mean_score": 80.125,
+      "median_score": 83.125,
+      "worst_score": 56.0,
+      "cvar25_score": 66.25,
+      "wins": 43,
+      "games": 48,
+      "win_rate": 89.583,
+      "mean_p10": 35.417,
+      "elapsed": 23.957
+    }
+  ]
+}

@@ -1,0 +1,943 @@
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import math
+import os
+import resource
+import select
+import signal
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from pathlib import Path
+
+import numpy as np
+
+
+ROOT = Path(__file__).resolve().parents[1]
+RESULTS = ROOT / "experiments/results"
+WORDS = json.loads((ROOT / "dataset/vocabulary.json").read_text())
+INDEX = {word.casefold(): index for index, word in enumerate(WORDS)}
+LAMP = INDEX["lamp"]
+POTATO = INDEX["potato"]
+GATE_SALT = "ioai26-potato-final-promotion-gate-20260827-v1"
+MASK_SALT = "ioai26-potato-final-gate-mask50-v1"
+SPECTRAL_SALT = "ioai26-potato-final-gate-spectral24-v1"
+BOOTSTRAP_SALT = "ioai26-potato-final-promotion-bootstrap-v1"
+CELL_NAMES = [
+    "full_raw",
+    "full_center75",
+    "full_mask50",
+    "full_spectral24",
+    "held_raw",
+    "held_mix60",
+    "held_center75",
+    "held_csls48",
+]
+CELL_SIZE = 50
+GATE_SIZE = CELL_SIZE * len(CELL_NAMES)
+BASELINE = ROOT / "baselines/score_57_02/solution.ipynb"
+CANDIDATE = ROOT / "experiments/candidates/consistency_base/solution.ipynb"
+EXPECTED_BASELINE = (
+    "2cc93b01302c0057b159780f7e0e41715d3c1cd8902487712e56ce267492c079"
+)
+EXPECTED_CANDIDATE = (
+    "8d61c1aa43f38d4665683143ac708fb9cae08f7ceecde65338ab5ec8fd94ceb0"
+)
+MANUAL_USED_SALTS = [
+    ("candidate-equivalence-v1", 32),
+    ("quantization-ablation-v1", 24),
+    ("candidate-quantized-equivalence-v1", 32),
+    ("consistency-switch-dev-v1", 64),
+    ("consistency-quant-guard-v1", 96),
+    ("consistency-candidate-equivalence-v1", 48),
+    ("consistency-dedup-equivalence-v1", 64),
+]
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def selected_indices(salt: str, count: int) -> list[int]:
+    return sorted(
+        range(len(WORDS)),
+        key=lambda index: hashlib.sha256(
+            (salt + "\0" + WORDS[index]).encode()
+        ).digest(),
+    )[:count]
+
+
+def result_used_indices() -> tuple[set[int], list[dict]]:
+    used: set[int] = set()
+    inventory = []
+    for path in sorted(RESULTS.glob("*.json")):
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        inventory.append(
+            {
+                "name": path.name,
+                "sha256": sha256(path),
+                "bytes": path.stat().st_size,
+            }
+        )
+        if not isinstance(data, dict):
+            continue
+        rows = data.get("rows")
+        explicit = False
+        if isinstance(rows, list):
+            for row in rows:
+                if (
+                    isinstance(row, dict)
+                    and isinstance(row.get("secret_indices"), list)
+                ):
+                    used.update(int(value) for value in row["secret_indices"])
+                    explicit = True
+        salt = data.get("salt")
+        if explicit or not isinstance(salt, str):
+            continue
+        if isinstance(data.get("games"), int):
+            used.update(selected_indices(salt, data["games"]))
+            continue
+        count = data.get("count")
+        if not isinstance(count, int) and isinstance(rows, list):
+            row_games = [
+                row.get("games")
+                for row in rows
+                if isinstance(row, dict)
+                and isinstance(row.get("games"), int)
+            ]
+            if row_games:
+                count = max(row_games)
+        if not isinstance(count, int):
+            continue
+        cells = max(
+            1,
+            len(data.get("folds", [])) * len(data.get("oracles", [])),
+        )
+        needed = (
+            count * cells
+            if data.get("secret_mode") == "cell_disjoint"
+            else count
+        )
+        used.update(selected_indices(salt, needed))
+    for salt, count in MANUAL_USED_SALTS:
+        used.update(selected_indices(salt, count))
+    public_path = ROOT / "dataset/test_public.json"
+    public_words = json.loads(public_path.read_text())
+    used.update(INDEX[word.casefold()] for word in public_words)
+    return used, inventory
+
+
+def prepare_manifest(path: Path) -> dict:
+    if sha256(BASELINE) != EXPECTED_BASELINE:
+        raise RuntimeError("Baseline hash changed")
+    if sha256(CANDIDATE) != EXPECTED_CANDIDATE:
+        raise RuntimeError("Candidate hash changed")
+    used, inventory = result_used_indices()
+    remaining = [
+        index
+        for index in range(len(WORDS))
+        if index not in used
+    ]
+    remaining.sort(
+        key=lambda index: hashlib.sha256(
+            (GATE_SALT + "\0" + WORDS[index]).encode()
+        ).digest()
+    )
+    if len(remaining) < GATE_SIZE:
+        raise RuntimeError(
+            f"Need {GATE_SIZE} untouched secrets, found {len(remaining)}"
+        )
+    gate = remaining[:GATE_SIZE]
+    sealed = remaining[GATE_SIZE:]
+    cells = []
+    for cell_index, name in enumerate(CELL_NAMES):
+        start = cell_index * CELL_SIZE
+        indices = gate[start : start + CELL_SIZE]
+        cells.append(
+            {
+                "index": cell_index,
+                "name": name,
+                "secret_indices": indices,
+                "blocks": [
+                    position % 5
+                    if cell_index >= 4
+                    else None
+                    for position in range(CELL_SIZE)
+                ],
+            }
+        )
+    thresholds = {
+        "overall_score_delta_min": 0.75,
+        "bootstrap_lower99_strictly_positive": True,
+        "net_rescues_min": 2,
+        "harms_max": 4,
+        "held_score_delta_min": 1.00,
+        "held_net_rescues_min": 2,
+        "raw_score_delta_min": -0.25,
+        "raw_harms_max": 0,
+        "cell_score_delta_min": -2.00,
+        "cell_win_delta_min": -1,
+        "major_gains_at_least_major_harms": True,
+        "resource_solution_seconds_max": 45.0,
+        "resource_total_seconds_max": 50.0,
+        "resource_vmhwm_kib_max": 63000,
+    }
+    manifest = {
+        "created_at": time.strftime(
+            "%Y-%m-%dT%H:%M:%S%z",
+            time.localtime(),
+        ),
+        "gate_script_sha256": sha256(Path(__file__)),
+        "vocabulary_sha256": sha256(
+            ROOT / "dataset/vocabulary.json"
+        ),
+        "embeddings_sha256": sha256(
+            ROOT / "dataset/public_embeddings.npy"
+        ),
+        "public_test_sha256": sha256(
+            ROOT / "dataset/test_public.json"
+        ),
+        "baseline": {
+            "path": str(BASELINE.relative_to(ROOT)),
+            "sha256": EXPECTED_BASELINE,
+        },
+        "candidate": {
+            "path": str(CANDIDATE.relative_to(ROOT)),
+            "sha256": EXPECTED_CANDIDATE,
+        },
+        "gate_salt": GATE_SALT,
+        "mask_salt": MASK_SALT,
+        "spectral_salt": SPECTRAL_SALT,
+        "bootstrap_salt": BOOTSTRAP_SALT,
+        "used_count": len(used),
+        "manual_used_salts": [
+            {"salt": salt, "count": count}
+            for salt, count in MANUAL_USED_SALTS
+        ],
+        "public_test_excluded": True,
+        "used_indices": sorted(used),
+        "remaining_count": len(remaining),
+        "gate_count": len(gate),
+        "sealed_count": len(sealed),
+        "sealed_indices_sha256": hashlib.sha256(
+            json.dumps(sealed, separators=(",", ":")).encode()
+        ).hexdigest(),
+        "cells": cells,
+        "result_inventory": inventory,
+        "thresholds": thresholds,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest, indent=2) + "\n")
+    return manifest
+
+
+def normalize_rows(values: np.ndarray) -> np.ndarray:
+    values = np.asarray(values, dtype=np.float32)
+    norms = np.sqrt(np.einsum("ij,ij->i", values, values))
+    if np.any(norms == 0.0):
+        raise ValueError("Zero vector in transformed oracle")
+    return np.asarray(values / norms[:, None], dtype=np.float32)
+
+
+class Oracles:
+    def __init__(self, fit_indices: list[int]):
+        embeddings = np.load(
+            ROOT / "dataset/public_embeddings.npy",
+            mmap_mode="r",
+        )
+        self.full = normalize_rows(embeddings)
+        fit = np.asarray(fit_indices, dtype=np.int64)
+        mean = self.full[fit].mean(axis=0)
+        self.center = normalize_rows(self.full - 0.75 * mean)
+        order = sorted(
+            range(self.full.shape[1]),
+            key=lambda dimension: hashlib.sha256(
+                (MASK_SALT + "\0" + str(dimension)).encode()
+            ).digest(),
+        )
+        keep = np.asarray(order[: self.full.shape[1] // 2])
+        self.mask = normalize_rows(self.full[:, keep])
+        centered_fit = self.full[fit] - mean
+        _, _, right = np.linalg.svd(
+            centered_fit,
+            full_matrices=False,
+        )
+        basis = np.asarray(right[:24], dtype=np.float32)
+        component_order = sorted(
+            range(24),
+            key=lambda component: hashlib.sha256(
+                (SPECTRAL_SALT + "\0" + str(component)).encode()
+            ).digest(),
+        )
+        signs = np.empty(24, dtype=np.float32)
+        signs[component_order[:12]] = 1.0
+        signs[component_order[12:]] = -1.0
+        centered = self.full - mean
+        coefficients = centered @ basis.T
+        factors = np.exp(0.25 * signs).astype(np.float32) - 1.0
+        self.spectral = normalize_rows(
+            mean + centered + (coefficients * factors) @ basis
+        )
+        self.blocks = []
+        self.block_centers = []
+        self.block_density = []
+        width = embeddings.shape[1] // 5
+        for block in range(5):
+            values = normalize_rows(
+                embeddings[:, block * width : (block + 1) * width]
+            )
+            self.blocks.append(values)
+            block_mean = values[fit].mean(axis=0)
+            self.block_centers.append(
+                normalize_rows(values - 0.75 * block_mean)
+            )
+            similarities = np.asarray(
+                values @ values.T,
+                dtype=np.float32,
+            )
+            np.fill_diagonal(similarities, -np.inf)
+            top = np.partition(
+                similarities,
+                len(WORDS) - 48,
+                axis=1,
+            )[:, len(WORDS) - 48 :]
+            self.block_density.append(
+                np.asarray(top.mean(axis=1), dtype=np.float32)
+            )
+
+    def difference(
+        self,
+        cell: int,
+        secret: int,
+        first: int,
+        second: int,
+        block: int | None,
+    ) -> float:
+        if cell == 0:
+            values = self.full
+            return float(values[secret] @ values[first]) - float(
+                values[secret] @ values[second]
+            )
+        if cell == 1:
+            values = self.center
+            return float(values[secret] @ values[first]) - float(
+                values[secret] @ values[second]
+            )
+        if cell == 2:
+            values = self.mask
+            return float(values[secret] @ values[first]) - float(
+                values[secret] @ values[second]
+            )
+        if cell == 3:
+            values = self.spectral
+            return float(values[secret] @ values[first]) - float(
+                values[secret] @ values[second]
+            )
+        if block is None:
+            raise ValueError("Held-block oracle requires a block")
+        if cell == 4:
+            values = self.blocks[block]
+            return float(values[secret] @ values[first]) - float(
+                values[secret] @ values[second]
+            )
+        if cell == 5:
+            held = self.blocks[block]
+            difference = 0.60 * (
+                float(held[secret] @ held[first])
+                - float(held[secret] @ held[second])
+            )
+            others = 0.0
+            for index, values in enumerate(self.blocks):
+                if index == block:
+                    continue
+                others += float(values[secret] @ values[first])
+                others -= float(values[secret] @ values[second])
+            return difference + 0.10 * others
+        if cell == 6:
+            values = self.block_centers[block]
+            return float(values[secret] @ values[first]) - float(
+                values[secret] @ values[second]
+            )
+        values = self.blocks[block]
+        density = self.block_density[block]
+        first_score = (
+            2.0 * float(values[secret] @ values[first])
+            - float(density[first])
+        )
+        second_score = (
+            2.0 * float(values[secret] @ values[second])
+            - float(density[second])
+        )
+        return first_score - second_score
+
+
+def send(process: subprocess.Popen, message: dict) -> None:
+    if process.stdin is None:
+        raise RuntimeError("Child stdin unavailable")
+    process.stdin.write((json.dumps(message) + "\n").encode())
+    process.stdin.flush()
+
+
+def read_line(
+    process: subprocess.Popen,
+    buffer: bytearray,
+    deadline: float,
+) -> str:
+    if process.stdout is None:
+        raise RuntimeError("Child stdout unavailable")
+    descriptor = process.stdout.fileno()
+    while True:
+        newline = buffer.find(b"\n")
+        if newline >= 0:
+            line = bytes(buffer[:newline])
+            del buffer[: newline + 1]
+            return line.decode()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Child response timed out")
+        ready, _, _ = select.select([descriptor], [], [], remaining)
+        if not ready:
+            raise TimeoutError("Child response timed out")
+        chunk = os.read(descriptor, 1024)
+        if not chunk:
+            raise RuntimeError("Child stopped before responding")
+        buffer.extend(chunk)
+        if len(buffer) > 4096:
+            raise RuntimeError("Child response exceeded 4096 bytes")
+
+
+def stop(process: subprocess.Popen) -> None:
+    if process.stdin is not None and not process.stdin.closed:
+        process.stdin.close()
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()
+
+
+def monitor_memory(
+    pid: int,
+    done: threading.Event,
+    result: dict[str, int],
+) -> None:
+    status = Path(f"/proc/{pid}/status")
+    peak = 0
+    while not done.is_set():
+        try:
+            for line in status.read_text().splitlines():
+                if line.startswith("VmHWM:"):
+                    peak = max(peak, int(line.split()[1]))
+        except (FileNotFoundError, ProcessLookupError):
+            break
+        done.wait(0.002)
+    result["vmhwm_kib"] = peak
+
+
+def convert_notebook(
+    notebook: Path,
+    directory: Path,
+) -> tuple[Path, float]:
+    started = time.monotonic()
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "jupyter",
+            "nbconvert",
+            "--to",
+            "python",
+            str(notebook),
+            "--output",
+            "solution",
+            "--output-dir",
+            str(directory),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        timeout=120,
+        check=False,
+    )
+    elapsed = time.monotonic() - started
+    path = directory / "solution.py"
+    if completed.returncode != 0 or not path.is_file():
+        raise RuntimeError(completed.stderr.decode(errors="replace"))
+    return path, elapsed
+
+
+def entries_from_manifest(manifest: dict) -> list[dict]:
+    entries = []
+    for cell in manifest["cells"]:
+        for secret, block in zip(
+            cell["secret_indices"],
+            cell["blocks"],
+            strict=True,
+        ):
+            entries.append(
+                {
+                    "cell": cell["index"],
+                    "secret": int(secret),
+                    "block": block,
+                }
+            )
+    return entries
+
+
+def run_notebook(
+    notebook: Path,
+    entries: list[dict],
+    oracles: Oracles,
+    force_max_turns: bool = False,
+) -> dict:
+    workspace = tempfile.TemporaryDirectory(prefix="potato-gate-")
+    directory = Path(workspace.name)
+    script, conversion_seconds = convert_notebook(notebook, directory)
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+        }
+    )
+    stderr_file = tempfile.TemporaryFile()
+    started = time.monotonic()
+    process = subprocess.Popen(
+        [sys.executable, str(script)],
+        cwd=ROOT,
+        env=environment,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=stderr_file,
+        start_new_session=True,
+    )
+    memory = {}
+    done = threading.Event()
+    monitor = threading.Thread(
+        target=monitor_memory,
+        args=(process.pid, done, memory),
+        daemon=True,
+    )
+    monitor.start()
+    deadline = started + 480.0
+    buffer = bytearray()
+    turns = []
+    responses = 0
+    try:
+        for entry in entries:
+            secret = entry["secret"]
+            send(process, {"event": "new_game"})
+            first = LAMP
+            second = POTATO
+            found = None
+            for turn in range(1, 31):
+                difference = oracles.difference(
+                    entry["cell"],
+                    secret,
+                    first,
+                    second,
+                    entry["block"],
+                )
+                if abs(difference) <= 1e-12:
+                    winner = first
+                    verdict = "same"
+                elif difference > 0.0:
+                    winner = first
+                    verdict = "first"
+                else:
+                    winner = second
+                    verdict = "second"
+                send(
+                    process,
+                    {
+                        "turn": turn,
+                        "winner_word": WORDS[winner],
+                        "verdict": verdict,
+                        "word1": WORDS[first],
+                        "word2": WORDS[second],
+                    },
+                )
+                response = json.loads(read_line(process, buffer, deadline))
+                responses += 1
+                proposal_word = response.get("new_word")
+                if not isinstance(proposal_word, str):
+                    raise RuntimeError("Invalid response object")
+                proposal = INDEX.get(proposal_word.casefold())
+                if proposal is None:
+                    raise RuntimeError("Response word outside vocabulary")
+                if proposal == secret and found is None:
+                    found = turn
+                    if not force_max_turns:
+                        send(process, {"status": "win"})
+                        break
+                first = winner
+                second = proposal
+            else:
+                send(process, {"status": "loss"})
+            turns.append(found)
+        send(process, {"event": "done"})
+    finally:
+        stop(process)
+        done.set()
+        monitor.join(timeout=1)
+        stderr_file.seek(0)
+        stderr_text = stderr_file.read().decode(errors="replace")
+        stderr_file.close()
+        workspace.cleanup()
+    solution_seconds = time.monotonic() - started
+    return {
+        "notebook_sha256": sha256(notebook),
+        "games": len(entries),
+        "force_max_turns": force_max_turns,
+        "responses": responses,
+        "turns": turns,
+        "conversion_seconds": round(conversion_seconds, 4),
+        "solution_seconds": round(solution_seconds, 4),
+        "total_seconds": round(
+            conversion_seconds + solution_seconds,
+            4,
+        ),
+        "vmhwm_kib": memory.get("vmhwm_kib", 0),
+        "rusage_children_kib": resource.getrusage(
+            resource.RUSAGE_CHILDREN
+        ).ru_maxrss,
+        "stderr": stderr_text,
+    }
+
+
+def game_score(turn: int | None) -> float:
+    if turn is None:
+        return 0.0
+    return 1.0 - 0.02 * max(0, turn - 10)
+
+
+def summary(turns: list[int | None]) -> dict:
+    values = np.asarray(
+        [31 if turn is None else turn for turn in turns],
+        dtype=np.int64,
+    )
+    scores = np.asarray([game_score(turn) for turn in turns])
+    return {
+        "games": len(turns),
+        "wins": int(np.sum(values <= 30)),
+        "score": round(100.0 * float(scores.mean()), 4),
+        "p10": round(100.0 * float(np.mean(values <= 10)), 3),
+        "p20": round(100.0 * float(np.mean(values <= 20)), 3),
+        "median_turn": float(np.median(values)),
+        "p90_turn": float(
+            np.quantile(values, 0.9, method="higher")
+        ),
+    }
+
+
+def paired_metrics(
+    baseline: list[int | None],
+    candidate: list[int | None],
+) -> dict:
+    base_values = np.asarray(
+        [31 if turn is None else turn for turn in baseline]
+    )
+    candidate_values = np.asarray(
+        [31 if turn is None else turn for turn in candidate]
+    )
+    base_scores = np.asarray([game_score(turn) for turn in baseline])
+    candidate_scores = np.asarray(
+        [game_score(turn) for turn in candidate]
+    )
+    delta = candidate_scores - base_scores
+    base_wins = base_values <= 30
+    candidate_wins = candidate_values <= 30
+    return {
+        "score_delta": round(100.0 * float(delta.mean()), 4),
+        "faster": int(np.sum(candidate_values < base_values)),
+        "identical": int(np.sum(candidate_values == base_values)),
+        "slower": int(np.sum(candidate_values > base_values)),
+        "rescues": int(np.sum(~base_wins & candidate_wins)),
+        "harms": int(np.sum(base_wins & ~candidate_wins)),
+        "major_gains": int(
+            np.sum(base_values - candidate_values >= 5)
+        ),
+        "major_harms": int(
+            np.sum(candidate_values - base_values >= 5)
+        ),
+        "paired_score_deltas": delta.tolist(),
+    }
+
+
+def bootstrap_lower99(
+    deltas_by_cell: list[np.ndarray],
+    replicates: int = 200000,
+) -> float:
+    seed = int.from_bytes(
+        hashlib.sha256(BOOTSTRAP_SALT.encode()).digest()[:8],
+        "big",
+    )
+    generator = np.random.Generator(np.random.PCG64(seed))
+    values = np.empty(replicates, dtype=np.float64)
+    position = 0
+    batch_size = 2000
+    while position < replicates:
+        size = min(batch_size, replicates - position)
+        total = np.zeros(size, dtype=np.float64)
+        count = 0
+        for deltas in deltas_by_cell:
+            choices = generator.integers(
+                0,
+                len(deltas),
+                size=(size, len(deltas)),
+            )
+            total += deltas[choices].sum(axis=1)
+            count += len(deltas)
+        values[position : position + size] = total / count
+        position += size
+    return 100.0 * float(np.quantile(values, 0.01))
+
+
+def analyze(
+    manifest: dict,
+    baseline_run: dict,
+    candidate_run: dict,
+    resource_run: dict,
+) -> dict:
+    baseline_turns = baseline_run["turns"]
+    candidate_turns = candidate_run["turns"]
+    cells = []
+    deltas_by_cell = []
+    for cell in manifest["cells"]:
+        start = cell["index"] * CELL_SIZE
+        stop = start + CELL_SIZE
+        baseline = baseline_turns[start:stop]
+        candidate = candidate_turns[start:stop]
+        paired = paired_metrics(baseline, candidate)
+        deltas_by_cell.append(
+            np.asarray(paired.pop("paired_score_deltas"))
+        )
+        cells.append(
+            {
+                "index": cell["index"],
+                "name": cell["name"],
+                "baseline": summary(baseline),
+                "candidate": summary(candidate),
+                "paired": paired,
+            }
+        )
+    overall_paired = paired_metrics(
+        baseline_turns,
+        candidate_turns,
+    )
+    overall_paired.pop("paired_score_deltas")
+    overall = {
+        "baseline": summary(baseline_turns),
+        "candidate": summary(candidate_turns),
+        "paired": overall_paired,
+        "bootstrap_lower99_score_delta": round(
+            bootstrap_lower99(deltas_by_cell),
+            6,
+        ),
+    }
+    held_baseline = baseline_turns[4 * CELL_SIZE :]
+    held_candidate = candidate_turns[4 * CELL_SIZE :]
+    held_paired = paired_metrics(held_baseline, held_candidate)
+    held_paired.pop("paired_score_deltas")
+    held = {
+        "baseline": summary(held_baseline),
+        "candidate": summary(held_candidate),
+        "paired": held_paired,
+    }
+    thresholds = manifest["thresholds"]
+    checks = {
+        "overall_score": (
+            overall_paired["score_delta"]
+            >= thresholds["overall_score_delta_min"]
+        ),
+        "bootstrap": (
+            overall["bootstrap_lower99_score_delta"] > 0.0
+        ),
+        "rescues": (
+            overall_paired["rescues"] - overall_paired["harms"]
+            >= thresholds["net_rescues_min"]
+            and overall_paired["harms"] <= thresholds["harms_max"]
+        ),
+        "held": (
+            held_paired["score_delta"]
+            >= thresholds["held_score_delta_min"]
+            and held_paired["rescues"] - held_paired["harms"]
+            >= thresholds["held_net_rescues_min"]
+        ),
+        "raw": (
+            cells[0]["paired"]["score_delta"]
+            >= thresholds["raw_score_delta_min"]
+            and cells[0]["paired"]["harms"]
+            <= thresholds["raw_harms_max"]
+        ),
+        "cells": all(
+            cell["paired"]["score_delta"]
+            >= thresholds["cell_score_delta_min"]
+            and (
+                cell["candidate"]["wins"]
+                - cell["baseline"]["wins"]
+                >= thresholds["cell_win_delta_min"]
+            )
+            for cell in cells
+        ),
+        "major": (
+            overall_paired["major_gains"]
+            >= overall_paired["major_harms"]
+        ),
+        "resource": (
+            resource_run["solution_seconds"]
+            <= thresholds["resource_solution_seconds_max"]
+            and resource_run["total_seconds"]
+            <= thresholds["resource_total_seconds_max"]
+            and resource_run["vmhwm_kib"]
+            <= thresholds["resource_vmhwm_kib_max"]
+            and not resource_run["stderr"]
+        ),
+    }
+    return {
+        "cells": cells,
+        "overall": overall,
+        "held": held,
+        "resource": resource_run,
+        "checks": checks,
+        "promote": all(checks.values()),
+    }
+
+
+def run_gate(manifest_path: Path, output: Path) -> dict:
+    manifest = json.loads(manifest_path.read_text())
+    if sha256(Path(__file__)) != manifest["gate_script_sha256"]:
+        raise RuntimeError("Gate script changed after manifest freeze")
+    if (
+        sha256(ROOT / "dataset/vocabulary.json")
+        != manifest["vocabulary_sha256"]
+    ):
+        raise RuntimeError("Vocabulary changed after manifest freeze")
+    if (
+        sha256(ROOT / "dataset/public_embeddings.npy")
+        != manifest["embeddings_sha256"]
+    ):
+        raise RuntimeError("Embeddings changed after manifest freeze")
+    if (
+        sha256(ROOT / "dataset/test_public.json")
+        != manifest["public_test_sha256"]
+    ):
+        raise RuntimeError("Public test list changed after manifest freeze")
+    if sha256(BASELINE) != manifest["baseline"]["sha256"]:
+        raise RuntimeError("Baseline changed after manifest freeze")
+    if sha256(CANDIDATE) != manifest["candidate"]["sha256"]:
+        raise RuntimeError("Candidate changed after manifest freeze")
+    excluded = {
+        manifest_path.resolve(),
+        output.resolve(),
+    }
+    current_inventory = {
+        path.name: sha256(path)
+        for path in RESULTS.glob("*.json")
+        if path.resolve() not in excluded
+    }
+    frozen_inventory = {
+        item["name"]: item["sha256"]
+        for item in manifest["result_inventory"]
+    }
+    if current_inventory != frozen_inventory:
+        raise RuntimeError("Results inventory changed after manifest freeze")
+    entries = entries_from_manifest(manifest)
+    oracles = Oracles(manifest["used_indices"])
+    baseline_run = run_notebook(BASELINE, entries, oracles)
+    candidate_run = run_notebook(CANDIDATE, entries, oracles)
+    resource_run = run_notebook(
+        CANDIDATE,
+        entries[:120],
+        oracles,
+        force_max_turns=True,
+    )
+    analysis = analyze(
+        manifest,
+        baseline_run,
+        candidate_run,
+        resource_run,
+    )
+    result = {
+        "manifest_sha256": sha256(manifest_path),
+        "baseline_run": baseline_run,
+        "candidate_run": candidate_run,
+        "analysis": analysis,
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(result, indent=2) + "\n")
+    return result
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    prepare = subparsers.add_parser("prepare")
+    prepare.add_argument("--manifest", type=Path, required=True)
+    run = subparsers.add_parser("run")
+    run.add_argument("--manifest", type=Path, required=True)
+    run.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    if args.command == "prepare":
+        manifest = prepare_manifest(args.manifest)
+        print(
+            json.dumps(
+                {
+                    "used_count": manifest["used_count"],
+                    "remaining_count": manifest["remaining_count"],
+                    "gate_count": manifest["gate_count"],
+                    "sealed_count": manifest["sealed_count"],
+                    "candidate_sha256": manifest["candidate"]["sha256"],
+                    "manifest": str(args.manifest),
+                }
+            )
+        )
+        return 0
+    result = run_gate(args.manifest, args.output)
+    analysis = result["analysis"]
+    print(
+        json.dumps(
+            {
+                "promote": analysis["promote"],
+                "checks": analysis["checks"],
+                "overall": analysis["overall"],
+                "held": analysis["held"],
+                "resource": {
+                    key: analysis["resource"][key]
+                    for key in [
+                        "solution_seconds",
+                        "total_seconds",
+                        "vmhwm_kib",
+                        "stderr",
+                    ]
+                },
+                "output": str(args.output),
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

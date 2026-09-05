@@ -1,0 +1,22 @@
+{
+  "notebook": "experiments/candidates/mi_base13/solution.ipynb",
+  "notebook_sha256": "26974a8bc09b3d91c8825e67351e661f434d40ef02a67b4dc8f47ff0b3628879",
+  "salt": "stress-driver-smoke",
+  "games": 2,
+  "force_max_turns": false,
+  "oracle": "half_center",
+  "responses": 24,
+  "wins": 2,
+  "score": 96.0,
+  "turns": [
+    11,
+    13
+  ],
+  "conversion_seconds": 1.5045,
+  "solution_seconds": 0.7569,
+  "total_seconds": 2.262,
+  "vmrss_kib": 62040,
+  "vmhwm_kib": 62040,
+  "rusage_children_kib": 92772,
+  "stderr": ""
+}

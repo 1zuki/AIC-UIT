@@ -1,0 +1,22 @@
+{
+  "notebook": "solution.ipynb",
+  "notebook_sha256": "2cc93b01302c0057b159780f7e0e41715d3c1cd8902487712e56ce267492c079",
+  "salt": "stress-driver-smoke",
+  "games": 2,
+  "force_max_turns": false,
+  "oracle": "half_center",
+  "responses": 22,
+  "wins": 2,
+  "score": 96.0,
+  "turns": [
+    8,
+    14
+  ],
+  "conversion_seconds": 1.5143,
+  "solution_seconds": 0.5341,
+  "total_seconds": 2.0487,
+  "vmrss_kib": 66620,
+  "vmhwm_kib": 66620,
+  "rusage_children_kib": 91996,
+  "stderr": ""
+}

@@ -1,0 +1,21 @@
+{
+  "notebook": "experiments/candidates/mi_base13/solution.ipynb",
+  "notebook_sha256": "ca2e0f8fa2160ff06b5c78572e49416639484782fe81d736bab89391721df458",
+  "salt": "candidate-process-smoke",
+  "games": 2,
+  "force_max_turns": false,
+  "responses": 16,
+  "wins": 2,
+  "score": 100.0,
+  "turns": [
+    8,
+    8
+  ],
+  "conversion_seconds": 1.4138,
+  "solution_seconds": 0.5803,
+  "total_seconds": 1.9946,
+  "vmrss_kib": 61516,
+  "vmhwm_kib": 61516,
+  "rusage_children_kib": 91840,
+  "stderr": ""
+}
